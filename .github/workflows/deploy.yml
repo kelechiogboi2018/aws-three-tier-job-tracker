@@ -9,32 +9,95 @@ permissions:
   contents: read
   id-token: write
 
+concurrency:
+  group: job-tracker-deployment
+  cancel-in-progress: false
+
 jobs:
-  verify-aws:
+  deploy-backend:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 25
+
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+      ECS_CLUSTER: job-tracker-cluster
+      ECS_SERVICE: job-tracker-backend
+      AWS_PAGER: ""
 
     steps:
-      - name: Check OIDC subject and audience
-        shell: python
-        run: |
-          import os, json, base64, urllib.request
-          url = os.environ["ACTIONS_ID_TOKEN_REQUEST_URL"] + "&audience=sts.amazonaws.com"
-          request = urllib.request.Request(url, headers={
-              "Authorization": "Bearer " + os.environ["ACTIONS_ID_TOKEN_REQUEST_TOKEN"]
-          })
-          token = json.load(urllib.request.urlopen(request))["value"]
-          payload = token.split(".")[1]
-          claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
-          print("Subject:", claims["sub"])
-          print("Audience:", claims["aud"])
+      - name: Check out code
+        uses: actions/checkout@v4
 
       - name: Authenticate to AWS using OIDC
         uses: aws-actions/configure-aws-credentials@v6.3.0
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
-          retry-max-attempts: 2
 
-      - name: Verify AWS identity
-        run: aws sts get-caller-identity
+      - name: Build and push backend image
+        run: |
+          set -euo pipefail
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          REGISTRY="$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
+          IMAGE="$REGISTRY/$ECR_REPOSITORY:$GITHUB_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+
+          aws ecr get-login-password |
+            docker login --username AWS --password-stdin "$REGISTRY"
+
+          docker build --platform linux/amd64 -t "$IMAGE" ./backend
+          docker push "$IMAGE"
+          echo "BACKEND_IMAGE=$IMAGE" >> "$GITHUB_ENV"
+
+      - name: Register and deploy new task revision
+        run: |
+          set -euo pipefail
+          CURRENT_TASK=$(aws ecs describe-services \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_SERVICE" \
+            --query 'services[0].taskDefinition' --output text)
+
+          aws ecs describe-task-definition \
+            --task-definition "$CURRENT_TASK" \
+            --query taskDefinition > current-task.json
+
+          jq --arg image "$BACKEND_IMAGE" '
+            .containerDefinitions |= map(
+              if .name == "backend" then .image = $image else . end
+            )
+            | del(
+                .taskDefinitionArn, .revision, .status,
+                .requiresAttributes, .compatibilities,
+                .registeredAt, .registeredBy, .deregisteredAt
+              )
+          ' current-task.json > new-task.json
+
+          NEW_TASK=$(aws ecs register-task-definition \
+            --cli-input-json file://new-task.json \
+            --query 'taskDefinition.taskDefinitionArn' --output text)
+
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_SERVICE" \
+            --task-definition "$NEW_TASK" > /dev/null
+
+          echo "DEPLOYED_TASK=$NEW_TASK" >> "$GITHUB_ENV"
+
+      - name: Verify deployment completed
+        run: |
+          set -euo pipefail
+          aws ecs wait services-stable \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_SERVICE"
+
+          ACTIVE_TASK=$(aws ecs describe-services \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_SERVICE" \
+            --query 'services[0].taskDefinition' --output text)
+
+          if [ "$ACTIVE_TASK" != "$DEPLOYED_TASK" ]; then
+            echo "Deployment did not retain the new task revision."
+            exit 1
+          fi
+
+          echo "Backend deployment completed successfully."

@@ -68,7 +68,7 @@ resource "aws_ecs_task_definition" "backend" {
 variable "backend_desired_count" {
   description = "Number of backend tasks; keep at zero until setup is ready"
   type        = number
-  default     = 0
+  default     = 1
 
   validation {
     condition = (
@@ -80,6 +80,9 @@ variable "backend_desired_count" {
 }
 
 resource "aws_ecs_service" "backend" {
+  lifecycle {
+    ignore_changes = [task_definition]
+  }
   name             = "job-tracker-backend"
   cluster          = aws_ecs_cluster.main.id
   task_definition  = aws_ecs_task_definition.backend.arn
