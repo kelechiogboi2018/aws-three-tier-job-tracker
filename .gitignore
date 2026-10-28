@@ -4,3 +4,13 @@
 node_modules/
 dist/
 /Dockerfile.txt
+# Terraform local files and sensitive state
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+*.tfplan
+crash.log
+/infrastructure/migration-network.json
+/infrastructure/migration-overrides.json

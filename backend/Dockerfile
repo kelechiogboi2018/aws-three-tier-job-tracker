@@ -8,6 +8,8 @@ RUN npm install --omit=dev
 
 COPY --chown=node:node server.js ./
 
+COPY --chown=node:node rds-global-bundle.pem ./
+
 USER node
 
 EXPOSE 3000
