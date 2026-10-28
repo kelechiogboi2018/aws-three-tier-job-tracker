@@ -16,7 +16,7 @@ resource "aws_iam_role" "github_deploy" {
       Condition = {
         StringEquals = {
           "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-          "token.actions.githubusercontent.com:sub" = "repo:kelechiogboi2018/aws-three-tier-job-tracker:ref:refs/heads/main"
+          "token.actions.githubusercontent.com:sub" = "repo:kelechiogboi2018@273621534/aws-three-tier-job-tracker@1436508377:ref:refs/heads/main"
         }
       }
     }]
