@@ -144,7 +144,7 @@ jobs:
             --content-type "text/html" \
             --cache-control "no-cache"
 
-      - name: Refresh CloudFront
+       - name: Refresh CloudFront
         run: |
           aws cloudfront create-invalidation \
             --distribution-id "$DISTRIBUTION_ID" \
